@@ -1,0 +1,16 @@
+-
+  name: 你好
+  type: click
+  key: hello
+
+-
+  name: 首页
+  type: view
+  url: http://www.haskell.org/
+
+- name: 子菜单
+  sub_button:
+    -
+      name: 菜单一
+      type: click
+      key: yy
