@@ -70,10 +70,6 @@ makeFoundation appSettings = do
 
     appBgThreadShutdown <- newEmptyMVar
 
-    (in_msg_handlers :: [SomeWxppInMsgHandler (LoggingT IO)])
-        <- readWxppInMsgHandlers allWxppInMsgHandlersWHNF "config/msg-handlers.yml"
-                            >>= either (throwM . userError . show) return
-
     -- We need a log function to create a connection pool. We need a connection
     -- pool to create our foundation. And we need our foundation to get a
     -- logging function. To get out of this loop, we initially create a
@@ -82,15 +78,21 @@ makeFoundation appSettings = do
     let mkFoundation appConnPool appAcid = do
             let get_access_token = wxppAcidGetUsableAccessToken appAcid
             let wxpp_config = appWxppAppConfig appSettings
-                handle_msg  = runAppLoggingT tf .
-                                tryEveryInMsgHandler'
-                                        appAcid
-                                        (liftIO get_access_token)
-                                        in_msg_handlers
-
+                handle_msg ime = runAppLoggingT tf $ do
+                                    (in_msg_handlers :: [SomeWxppInMsgHandler (LoggingT IO)])
+                                        <- liftIO $
+                                            readWxppInMsgHandlers
+                                                allWxppInMsgHandlersWHNF "config/msg-handlers.yml"
+                                            >>= either (throwM . userError . show) return
+                                    tryEveryInMsgHandler'
+                                            appAcid
+                                            (liftIO get_access_token)
+                                            in_msg_handlers
+                                            ime
                 appWxppSub  = WxppSub wxpp_config get_access_token handle_msg
                 tf = App {..}
             return tf
+
     tempFoundation <- mkFoundation (error "connPool forced in tempFoundation")
                             (error "appAcid forced in tempFoundation")
     let logFunc = messageLoggerSource tempFoundation appLogger
