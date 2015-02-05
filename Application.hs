@@ -33,7 +33,6 @@ import qualified Data.Acid                  as A
 import Yesod.Helpers.Acid
 
 import WeiXin.PublicPlatform.Yesod.Site
-import WeiXin.PublicPlatform.Security
 import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.BgWork
 
@@ -69,9 +68,7 @@ makeFoundation appSettings = do
     -- temporary foundation without a real connection pool, get a log function
     -- from there, and then create the real foundation.
     let mkFoundation appConnPool appAcid = do
-            let get_access_token = fmap (fmap fst) $
-                                    A.query appAcid WxppAcidGetAcccessTokens
-                                        >>= newestUsableAccessToken
+            let get_access_token = wxppAcidGetUsableAccessToken appAcid
             let wxpp_config = appWxppAppConfig appSettings
                 handle_msg  = \_ -> return $ Right Nothing
                 appWxppSub  = WxppSub wxpp_config get_access_token handle_msg
