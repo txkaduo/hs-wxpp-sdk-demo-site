@@ -1,0 +1,5 @@
+-
+  name: welcome-subscribe
+  msg:
+    type: text
+    text: 欢迎

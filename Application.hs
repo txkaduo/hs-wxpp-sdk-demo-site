@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Application
     ( getApplicationDev
     , appMain
@@ -12,7 +13,7 @@ module Application
     , db
     ) where
 
-import Control.Monad.Logger                 (liftLoc, runLoggingT)
+import Control.Monad.Logger                 (liftLoc, runLoggingT, LoggingT(..))
 import Database.Persist.Sqlite              (createSqlitePool, runSqlPool,
                                              sqlDatabase, sqlPoolSize)
 import Import
@@ -35,6 +36,7 @@ import Yesod.Helpers.Acid
 import WeiXin.PublicPlatform.Yesod.Site
 import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.BgWork
+import WeiXin.PublicPlatform.InMsgHandler
 
 -- Import all relevant handler modules here.
 -- Don't forget to add new modules to your cabal file!
@@ -45,6 +47,12 @@ import Handler.Home
 -- of the call to mkYesodData which occurs in Foundation.hs. Please see the
 -- comments there for more details.
 mkYesodDispatch "App" resourcesApp
+
+
+allWxppInMsgHandlersWHNF ::
+    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m ) =>
+    [SomeWxppInMsgHandler m]
+allWxppInMsgHandlersWHNF = allBasicWxppInMsgHandlersWHNF
 
 -- | This function allocates resources (such as a database connection pool),
 -- performs initialization and return a foundation datatype value. This is also
@@ -62,6 +70,10 @@ makeFoundation appSettings = do
 
     appBgThreadShutdown <- newEmptyMVar
 
+    (in_msg_handlers :: [SomeWxppInMsgHandler (LoggingT IO)])
+        <- readWxppInMsgHandlers allWxppInMsgHandlersWHNF "config/msg-handlers.yml"
+                            >>= either (throwM . userError . show) return
+
     -- We need a log function to create a connection pool. We need a connection
     -- pool to create our foundation. And we need our foundation to get a
     -- logging function. To get out of this loop, we initially create a
@@ -70,9 +82,15 @@ makeFoundation appSettings = do
     let mkFoundation appConnPool appAcid = do
             let get_access_token = wxppAcidGetUsableAccessToken appAcid
             let wxpp_config = appWxppAppConfig appSettings
-                handle_msg  = \_ -> return $ Right Nothing
+                handle_msg  = runAppLoggingT tf .
+                                tryEveryInMsgHandler'
+                                        appAcid
+                                        (liftIO get_access_token)
+                                        in_msg_handlers
+
                 appWxppSub  = WxppSub wxpp_config get_access_token handle_msg
-            return $ App {..}
+                tf = App {..}
+            return tf
     tempFoundation <- mkFoundation (error "connPool forced in tempFoundation")
                             (error "appAcid forced in tempFoundation")
     let logFunc = messageLoggerSource tempFoundation appLogger
