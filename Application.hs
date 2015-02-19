@@ -49,10 +49,10 @@ import Handler.Home
 mkYesodDispatch "App" resourcesApp
 
 
-allWxppInMsgHandlersWHNF ::
+allWxppInMsgHandlerProxies ::
     ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m ) =>
-    [SomeWxppInMsgHandler m]
-allWxppInMsgHandlersWHNF = allBasicWxppInMsgHandlersWHNF
+    [SomeWxppInMsgHandlerProxy m]
+allWxppInMsgHandlerProxies = allBasicWxppInMsgHandlerProxies
 
 -- | This function allocates resources (such as a database connection pool),
 -- performs initialization and return a foundation datatype value. This is also
@@ -82,7 +82,7 @@ makeFoundation appSettings = do
                                     (in_msg_handlers :: [SomeWxppInMsgHandler (LoggingT IO)])
                                         <- liftIO $
                                             readWxppInMsgHandlers
-                                                allWxppInMsgHandlersWHNF "config/msg-handlers.yml"
+                                                allWxppInMsgHandlerProxies "config/msg-handlers.yml"
                                             >>= either (throwM . userError . show) return
                                     tryEveryInMsgHandler'
                                             appAcid
