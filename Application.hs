@@ -16,7 +16,7 @@ module Application
 import Control.Monad.Logger                 (liftLoc, runLoggingT, LoggingT(..))
 import Database.Persist.Sqlite              (createSqlitePool, runSqlPool,
                                              sqlDatabase, sqlPoolSize)
-import Import
+import Import hiding (Proxy)
 import Language.Haskell.TH.Syntax           (qLocation)
 import Network.Wai.Handler.Warp             (Settings, defaultSettings,
                                              defaultShouldDisplayException,
@@ -29,6 +29,7 @@ import Network.Wai.Middleware.RequestLogger (Destination (Logger),
 import System.Log.FastLogger                (defaultBufSize, newStdoutLoggerSet,
                                              toLogStr)
 import Control.Concurrent.Async             (async, Async)
+import Data.Proxy
 
 import qualified Data.Acid                  as A
 import Yesod.Helpers.Acid
@@ -49,10 +50,15 @@ import Handler.Home
 mkYesodDispatch "App" resourcesApp
 
 
-allWxppInMsgHandlerProxies ::
-    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m ) =>
-    [SomeWxppInMsgHandlerProxy m]
-allWxppInMsgHandlerProxies = allBasicWxppInMsgHandlerProxies
+allWxppInMsgHandlerPrototypes :: forall m.
+    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
+    App
+    -> [WxppInMsgHandlerPrototype m]
+allWxppInMsgHandlerPrototypes foundation =
+    WxppInMsgHandlerPrototype
+        (Proxy :: Proxy (StoreMessageToDB m))
+        (WxppSubDBActionRunner $ runAppMainDB foundation)
+    : allBasicWxppInMsgHandlerPrototypes
 
 -- | This function allocates resources (such as a database connection pool),
 -- performs initialization and return a foundation datatype value. This is also
@@ -78,18 +84,18 @@ makeFoundation appSettings = do
     let mkFoundation appConnPool appAcid = do
             let get_access_token = wxppAcidGetUsableAccessToken appAcid
             let wxpp_config = appWxppAppConfig appSettings
-                handle_msg ime = runAppLoggingT tf $ do
-                                    (in_msg_handlers :: [SomeWxppInMsgHandler (LoggingT IO)])
-                                        <- liftIO $
+                handle_msg bs ime = runAppLoggingT tf $ do
+                                    in_msg_handlers <- liftIO $
                                             readWxppInMsgHandlers
-                                                allWxppInMsgHandlerProxies "config/msg-handlers.yml"
+                                                (allWxppInMsgHandlerPrototypes tf)
+                                                "config/msg-handlers.yml"
                                             >>= either (throwM . userError . show) return
                                     tryEveryInMsgHandler'
                                             appAcid
                                             (liftIO get_access_token)
                                             in_msg_handlers
-                                            ime
-                appWxppSub  = WxppSub wxpp_config get_access_token handle_msg
+                                            bs ime
+                appWxppSub  = WxppSub wxpp_config get_access_token handle_msg (runAppLoggingT tf)
                 tf = App {..}
             return tf
 
