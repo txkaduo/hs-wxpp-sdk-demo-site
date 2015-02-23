@@ -3,3 +3,6 @@
   msg:
     type: text
     text: 欢迎
+
+-
+  name: db-store-all
