@@ -158,7 +158,7 @@ initAppBgWorks foundation = do
                                     acid
                                     (fromIntegral (60 * 5 :: Int))
                                             -- 接近过期 5 分钟内会更新 access token
-                ay2 <- async $ A.createCheckpoint acid
+                ay2 <- async $ loopRunBgJob chk_abort (60 * 10) (A.createCheckpoint acid)
                 return [ay, ay2]
                 
             else return []
