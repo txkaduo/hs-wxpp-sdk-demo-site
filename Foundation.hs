@@ -160,6 +160,18 @@ runAppLoggingT foundation op = do
     let logger = appLogger foundation
     runLoggingT op (messageLoggerSource foundation logger)
 
+runAppMainDB :: MonadBaseControl IO m =>
+    App
+    -> SqlPersistT m a
+    -> m a
+runAppMainDB foundation op = runSqlPool op (appConnPool foundation)
+
+runAppMainDBLogged :: MonadBaseControl IO m =>
+    App
+    -> SqlPersistT (LoggingT m) a
+    -> m a
+runAppMainDBLogged foundation = runAppLoggingT foundation . runAppMainDB foundation
+
 -- Note: Some functionality previously present in the scaffolding has been
 -- moved to documentation in the Wiki. Following are some hopefully helpful
 -- links:
