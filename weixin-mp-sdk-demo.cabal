@@ -25,6 +25,7 @@ library
 
     if flag(dev) || flag(library-only)
         cpp-options:   -DDEVELOPMENT
+        -- -DOFFLOAD_STATIC_SITE=http://static.example.com
         ghc-options:   -Wall -fwarn-tabs -O0
     else
         ghc-options:   -Wall -fwarn-tabs -O2

@@ -111,6 +111,12 @@ instance Yesod App where
 
     makeLogger = return . appLogger
 
+#if !defined(DEVELOPMENT) && defined(OFFLOAD_STATIC_SITE)
+    urlRenderOverride master    (StaticR s) =
+        Just $ uncurry (joinPath master OFFLOAD_STATIC_SITE) $ renderRoute s
+    urlRenderOverride _         _           = Nothing
+#endif
+
 -- How to run database actions.
 instance YesodPersist App where
     type YesodPersistBackend App = SqlBackend
