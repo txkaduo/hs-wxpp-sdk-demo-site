@@ -29,12 +29,14 @@ import Network.Wai.Middleware.RequestLogger (Destination (Logger),
 import System.Log.FastLogger                (defaultBufSize, newStdoutLoggerSet,
                                              toLogStr)
 import Control.Concurrent.Async             (async, Async)
+import Control.Concurrent                   (threadDelay)
 import Data.Proxy
 
 import qualified Data.Acid                  as A
 import Yesod.Helpers.Acid
 
 import WeiXin.PublicPlatform.Yesod.Site
+import WeiXin.PublicPlatform.Yesod.Site.Function
 import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.BgWork
 import WeiXin.PublicPlatform.InMsgHandler
@@ -56,8 +58,10 @@ allWxppInMsgHandlerPrototypes :: forall m.
     -> [WxppInMsgHandlerPrototype m]
 allWxppInMsgHandlerPrototypes foundation =
     WxppInMsgHandlerPrototype
-        (Proxy :: Proxy (StoreMessageToDB m))
-        (WxppSubDBActionRunner $ runAppMainDB foundation)
+        (Proxy :: Proxy (StoreInMsgToDB m))
+        ( WxppSubDBActionRunner $ runAppMainDB foundation
+        , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (x, y)
+        )
     : allBasicWxppInMsgHandlerPrototypes
 
 -- | This function allocates resources (such as a database connection pool),
@@ -75,6 +79,8 @@ makeFoundation appSettings = do
         (appStaticDir appSettings)
 
     appBgThreadShutdown <- newEmptyMVar
+
+    appDownloadMediaChan <- newChan
 
     -- We need a log function to create a connection pool. We need a connection
     -- pool to create our foundation. And we need our foundation to get a
@@ -175,12 +181,39 @@ initAppBgWorks foundation = do
                     ay <- async $ f skipAuthenticationCheck acid
                     return [ay]
 
-    return $ a1 <> a2
+    let read_chan_and_down = do
+            if_done <- chk_abort
+            if if_done
+                then return ()
+                else do
+                    (msg_id, media_id) <- readChan down_chan
+                    m_atk <- wxppAcidGetUsableAccessToken acid
+                    runAppLoggingT foundation $ do
+                      case m_atk of
+                          Nothing   -> do
+                              -- 没有可用的 AccessToken
+                              -- 这可能是个暂时的困难，可以稍等之后重试
+                              -- TODO: 但又不能长时间地重试，以免积压过多的请求
+                              $(logError) $
+                                "Cannot download media because of no AccessToken available"
+                              liftIO $ do
+                                threadDelay $ 1000 * 1000 * 15
+                                writeChan down_chan (msg_id, media_id)
+
+                          Just atk  -> do
+                              runAppMainDB foundation $
+                                  downloadSaveMediaToDB atk msg_id media_id
+                    read_chan_and_down
+
+    a3 <- async $ read_chan_and_down
+
+    return $ a3 : a1 <> a2
     where
         acid = appAcid foundation
         wac     = appWxppAppConfig $ appSettings foundation
         acid_config = appAcidConfig $ appSettings foundation
         chk_abort = readMVar (appBgThreadShutdown foundation) >> return True
+        down_chan = appDownloadMediaChan foundation
 
 -- | For yesod devel, return the Warp settings and WAI Application.
 getApplicationDev :: IO (Settings, Application)

@@ -13,6 +13,7 @@ import Control.Monad.Logger                 (runLoggingT, LoggingT)
 import Yesod.Helpers.Acid
 import WeiXin.PublicPlatform.Yesod.Site
 import WeiXin.PublicPlatform.Acid
+import WeiXin.PublicPlatform.Types
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -27,6 +28,7 @@ data App = App
     , appWxppSub     :: WxppSub
     , appBgThreadShutdown   :: MVar ()
     , appAcid               :: AcidState WxppAcidState
+    , appDownloadMediaChan  :: Chan (WxppInMsgRecordId, WxppMediaID)
         -- ^ put value into this MVar will make backgroup threads exit
     }
 
