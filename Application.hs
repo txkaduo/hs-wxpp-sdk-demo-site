@@ -57,7 +57,7 @@ allWxppInMsgHandlerPrototypes :: forall m.
     App
     -> [WxppInMsgHandlerPrototype m]
 allWxppInMsgHandlerPrototypes foundation =
-    WxppInMsgHandlerPrototype
+    WxppInMsgProcessorPrototype
         (Proxy :: Proxy (StoreInMsgToDB m))
         ( WxppSubDBActionRunner $ runAppMainDB foundation
         , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (x, y)
