@@ -52,17 +52,33 @@ import Handler.Home
 mkYesodDispatch "App" resourcesApp
 
 
-allWxppInMsgHandlerPrototypes :: forall m.
+-- | 因下面的 WxppInMsgDispatchHandler 也要一个 [WxppInMsgHandlerPrototype m]
+-- 所以做了这个不带 WxppInMsgDispatchHandler
+allWxppInMsgHandlerPrototypes' :: forall m.
     ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
     App
     -> [WxppInMsgHandlerPrototype m]
-allWxppInMsgHandlerPrototypes foundation =
+allWxppInMsgHandlerPrototypes' foundation =
     WxppInMsgProcessorPrototype
         (Proxy :: Proxy (StoreInMsgToDB m))
         ( WxppSubDBActionRunner $ runAppMainDB foundation
         , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (x, y)
         )
     : allBasicWxppInMsgHandlerPrototypes
+
+
+allWxppInMsgHandlerPrototypes :: forall m.
+    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
+    App
+    -> [WxppInMsgHandlerPrototype m]
+allWxppInMsgHandlerPrototypes foundation =
+    WxppInMsgProcessorPrototype
+        (Proxy :: Proxy (WxppInMsgDispatchHandler m))
+        ( allBasicWxppInMsgPredictorPrototypes
+        , allWxppInMsgHandlerPrototypes' foundation
+        )
+    : allWxppInMsgHandlerPrototypes' foundation
+
 
 -- | This function allocates resources (such as a database connection pool),
 -- performs initialization and return a foundation datatype value. This is also
