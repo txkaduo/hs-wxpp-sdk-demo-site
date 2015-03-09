@@ -1,8 +1,33 @@
 -
   name: welcome-subscribe
   msg:
-    type: text
-    text: 欢迎
+    text: 你好，欢迎！
 
 -
   name: db-store-all
+
+-
+  name: dispatch
+  route:
+    -
+      predictor:
+        name: one-of
+        texts:
+          - 你好
+          - 您好
+
+      handler:
+        name: const
+        msg:
+          text: 您好
+
+    -
+      predictor:
+        name: one-of-posix-re
+        re:
+          - 淘宝店是什么
+
+      handler:
+        name: const
+        msg:
+          text: http://www.taobao.com
