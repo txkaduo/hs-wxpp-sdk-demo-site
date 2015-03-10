@@ -38,6 +38,7 @@ import Yesod.Helpers.Acid
 import WeiXin.PublicPlatform.Yesod.Site
 import WeiXin.PublicPlatform.Yesod.Site.Function
 import WeiXin.PublicPlatform.Acid
+import WeiXin.PublicPlatform.CS
 import WeiXin.PublicPlatform.BgWork
 import WeiXin.PublicPlatform.InMsgHandler
 
@@ -97,6 +98,7 @@ makeFoundation appSettings = do
     appBgThreadShutdown <- newEmptyMVar
 
     appDownloadMediaChan <- newChan
+    appSendOutMsgsChan <- newChan
 
     -- We need a log function to create a connection pool. We need a connection
     -- pool to create our foundation. And we need our foundation to get a
@@ -117,7 +119,10 @@ makeFoundation appSettings = do
                                             (liftIO get_access_token)
                                             in_msg_handlers
                                             bs ime
-                appWxppSub  = WxppSub wxpp_config get_access_token handle_msg (runAppLoggingT tf)
+
+                send_msg = writeChan appSendOutMsgsChan
+
+                appWxppSub  = WxppSub wxpp_config get_access_token send_msg handle_msg (runAppLoggingT tf)
                 tf = App {..}
             return tf
 
@@ -223,13 +228,31 @@ initAppBgWorks foundation = do
 
     a3 <- async $ read_chan_and_down
 
-    return $ a3 : a1 <> a2
+    let read_chan_and_send = do
+            if_done <- chk_abort
+            if if_done
+                then return ()
+                else do
+                    out_msg_e_lst <- readChan send_chan
+                    m_atk <- wxppAcidGetUsableAccessToken acid
+                    runAppLoggingT foundation $ do
+                      case m_atk of
+                            Nothing -> do
+                                $(logError) $ "cannot send outgoing messages through CS: "
+                                    <> "no access token available"
+                            Just atk ->
+                                mapM_ (wxppCsSendOutMsg atk Nothing) out_msg_e_lst
+
+    a4 <- async $ read_chan_and_send
+
+    return $ a4 : a3 : a1 <> a2
     where
         acid = appAcid foundation
         wac     = appWxppAppConfig $ appSettings foundation
         acid_config = appAcidConfig $ appSettings foundation
         chk_abort = readMVar (appBgThreadShutdown foundation) >> return True
         down_chan = appDownloadMediaChan foundation
+        send_chan = appSendOutMsgsChan foundation
 
 -- | For yesod devel, return the Warp settings and WAI Application.
 getApplicationDev :: IO (Settings, Application)

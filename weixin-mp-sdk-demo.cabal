@@ -85,7 +85,7 @@ library
                  , acid-state
                  , yesod-helpers
                  , async
-                 , weixin-mp-sdk                 >= 0.2
+                 , weixin-mp-sdk                 >= 0.3
 
 executable         weixin-mp-sdk-demo
     if flag(library-only)
