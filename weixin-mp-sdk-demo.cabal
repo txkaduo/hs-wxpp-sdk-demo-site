@@ -85,6 +85,7 @@ library
                  , acid-state
                  , yesod-helpers
                  , async
+                 , system-filepath
                  , weixin-mp-sdk                 >= 0.3
 
 executable         weixin-mp-sdk-demo

@@ -32,5 +32,7 @@ wxpp:
     - "_env:WXPP_AES_KEY:WJmA6ZeDKg3yVYf4iuVmksKjFZdfZqbnliig6iUfpJf="
     - "_env:WXPP_AES_KEY2:"
 
+wxpp-data-dir   : "_env:WXPP_DATA_DIR:demo-data"
+
 acid:
   connect: "_env:ACID_CONNECT:state"

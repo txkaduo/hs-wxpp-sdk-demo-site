@@ -17,6 +17,7 @@ import Network.Wai.Handler.Warp    (HostPreference)
 import Yesod.Default.Config2       (applyEnvValue, configSettingsYml)
 import Yesod.Default.Util          (WidgetFileSettings, widgetFileNoReload,
                                     widgetFileReload)
+import Filesystem.Path.CurrentOS   (fromText, FilePath)
 
 import Yesod.Helpers.Acid
 import WeiXin.PublicPlatform.Types
@@ -56,6 +57,7 @@ data AppSettings = AppSettings
     , appAnalytics              :: Maybe Text
     -- ^ Google Analytics code
     , appWxppAppConfig          :: WxppAppConfig
+    , appWxppDataDir            :: FilePath
     , appAcidConfig             :: AcidStateConfig
     }
 
@@ -83,6 +85,7 @@ instance FromJSON AppSettings where
         appCopyright              <- o .: "copyright"
         appAnalytics              <- o .:? "analytics"
         appWxppAppConfig          <- o .: "wxpp"
+        appWxppDataDir            <- fromText <$> o .: "wxpp-data-dir"
         appAcidConfig             <- o .: "acid"
 
         return AppSettings {..}

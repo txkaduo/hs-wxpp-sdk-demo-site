@@ -30,6 +30,7 @@ import System.Log.FastLogger                (defaultBufSize, newStdoutLoggerSet,
                                              toLogStr)
 import Control.Concurrent.Async             (async, Async)
 import Control.Concurrent                   (threadDelay)
+import Filesystem.Path.CurrentOS            (fromText, encodeString)
 import Data.Proxy
 
 import qualified Data.Acid                  as A
@@ -65,7 +66,9 @@ allWxppInMsgHandlerPrototypes' foundation =
         ( WxppSubDBActionRunner $ runAppMainDB foundation
         , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (x, y)
         )
-    : allBasicWxppInMsgHandlerPrototypes
+    : allBasicWxppInMsgHandlerPrototypes (appWxppDataDir settings </> "out-msg")
+    where
+        settings = appSettings foundation
 
 
 allWxppInMsgHandlerPrototypes :: forall m.
@@ -108,11 +111,12 @@ makeFoundation appSettings = do
     let mkFoundation appConnPool appAcid = do
             let get_access_token = wxppAcidGetUsableAccessToken appAcid
             let wxpp_config = appWxppAppConfig appSettings
+                data_dir = appWxppDataDir appSettings
                 handle_msg bs ime = runAppLoggingT tf $ do
                                     in_msg_handlers <- liftIO $
                                             readWxppInMsgHandlers
                                                 (allWxppInMsgHandlerPrototypes tf)
-                                                "config/msg-handlers.yml"
+                                                (encodeString $ data_dir </> fromText "msg-handlers.yml")
                                             >>= either (throwM . userError . show) return
                                     tryEveryInMsgHandler'
                                             appAcid
@@ -122,7 +126,9 @@ makeFoundation appSettings = do
 
                 send_msg = writeChan appSendOutMsgsChan
 
-                appWxppSub  = WxppSub wxpp_config get_access_token send_msg handle_msg (runAppLoggingT tf)
+                appWxppSub  = WxppSub wxpp_config get_access_token send_msg
+                                data_dir
+                                handle_msg (runAppLoggingT tf)
                 tf = App {..}
             return tf
 
