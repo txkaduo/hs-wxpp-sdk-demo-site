@@ -30,6 +30,7 @@ data App = App
     , appAcid               :: AcidState WxppAcidState
     , appDownloadMediaChan  :: Chan (WxppInMsgRecordId, WxppMediaID)
         -- ^ put value into this MVar will make backgroup threads exit
+    , appSendOutMsgsChan    :: Chan [WxppOutMsgEntity]
     }
 
 instance HasHttpManager App where
