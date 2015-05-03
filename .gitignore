@@ -14,6 +14,6 @@ cabal.sandbox.config
 *.swp
 state/
 *-state/
-*-data/
+wx-data
 run-test.sh
 run-real.sh
