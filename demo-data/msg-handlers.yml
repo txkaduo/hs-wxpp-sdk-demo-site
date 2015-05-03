@@ -11,7 +11,7 @@
   name  : dispatch
   route :
     -
-      predicator  :
+      predictor  :
         name  : one-of
         texts :
           - 你好
