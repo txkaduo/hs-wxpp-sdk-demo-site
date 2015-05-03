@@ -35,4 +35,4 @@ wxpp:
 wxpp-data-dir   : "_env:WXPP_DATA_DIR:demo-data"
 
 acid:
-  connect: "_env:ACID_CONNECT:state"
+  connect: "_env:ACID_CONNECT:demo-state"
