@@ -14,3 +14,8 @@
       name: 菜单一
       type: click
       key: yy
+
+    -
+      name: 菜单二
+      type: click
+      key: zz

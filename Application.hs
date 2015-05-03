@@ -42,6 +42,7 @@ import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.CS
 import WeiXin.PublicPlatform.BgWork
 import WeiXin.PublicPlatform.InMsgHandler
+import WeiXin.PublicPlatform.Menu
 
 -- Import all relevant handler modules here.
 -- Don't forget to add new modules to your cabal file!
@@ -251,7 +252,17 @@ initAppBgWorks foundation = do
 
     a4 <- async $ read_chan_and_send
 
-    return $ a4 : a3 : a1 <> a2
+    a5 <- async $ runAppLoggingT foundation $ do
+                    -- XXX: 延迟一点，等待 access token 加载完成
+                    -- 如果不能解决问题，可以等 access token 确认已取得后，重启程序
+                    liftIO $ threadDelay $ 2 * 1000 * 1000
+
+                    wxppWatchMenuYaml
+                        (wxppAcidGetUsableAccessToken acid)
+                        (void chk_abort)
+                        (appWxppDataDir settings </> "menu.yml")
+
+    return $ a5 : a4 : a3 : a1 <> a2
     where
         acid = appAcid foundation
         wac     = appWxppAppConfig $ appSettings foundation
@@ -259,6 +270,7 @@ initAppBgWorks foundation = do
         chk_abort = readMVar (appBgThreadShutdown foundation) >> return True
         down_chan = appDownloadMediaChan foundation
         send_chan = appSendOutMsgsChan foundation
+        settings = appSettings foundation
 
 -- | For yesod devel, return the Warp settings and WAI Application.
 getApplicationDev :: IO (Settings, Application)

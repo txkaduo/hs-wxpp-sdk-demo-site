@@ -17,7 +17,7 @@ import Network.Wai.Handler.Warp    (HostPreference)
 import Yesod.Default.Config2       (applyEnvValue, configSettingsYml)
 import Yesod.Default.Util          (WidgetFileSettings, widgetFileNoReload,
                                     widgetFileReload)
-import Filesystem.Path.CurrentOS   (fromText, FilePath)
+import Filesystem.Path.CurrentOS   (fromText)
 
 import Yesod.Helpers.Acid
 import WeiXin.PublicPlatform.Types
