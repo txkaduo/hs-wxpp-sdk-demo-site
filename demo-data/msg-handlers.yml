@@ -1,0 +1,22 @@
+-
+  name: welcome-subscribe
+  msg:
+    type: text
+    text: 欢迎
+
+-
+  name: db-store-all
+
+-
+  name  : dispatch
+  route :
+    -
+      predicator  :
+        name  : one-of
+        texts :
+          - 你好
+          - 您好
+
+      handler:
+        name  : const
+        file  : 你好.yml

@@ -25,11 +25,14 @@ copyright: Insert copyright statement here
 #analytics: UA-YOURCODE
 
 wxpp:
-  app-id: wx5961c4d11d66a53c
-  secret: "172947fa370ddeae040f9a06a11342b1"
-  token: testtoken
+  app-id: "_env:WXPP_APP_ID:wx5961c4d11d66a53c"
+  secret: "_env:WXPP_SECRET:172947fa370ddeae040f9a06a11342b1"
+  token: "_env:kXPP_TOKEN:testtoken"
   aes-key:
-    - WJmA6ZeDKg3yVYf4iuVmksKjFZdfZqbnliig6iUfpJf=
+    - "_env:WXPP_AES_KEY:WJmA6ZeDKg3yVYf4iuVmksKjFZdfZqbnliig6iUfpJf="
+    - "_env:WXPP_AES_KEY2:"
+
+wxpp-data-dir   : "_env:WXPP_DATA_DIR:demo-data"
 
 acid:
-  connect: state
+  connect: "_env:ACID_CONNECT:state"
