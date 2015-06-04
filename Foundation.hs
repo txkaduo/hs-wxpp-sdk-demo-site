@@ -142,8 +142,8 @@ appGetWxppSub foundation =
         (flip Map.lookup $ appLastMsgHandlers foundation)
         (appWxppAppConfigMap $ appSettings foundation)
         (allWxppInMsgHandlerPrototypes foundation)
-        (appSendOutMsgsChan foundation)
-        (appDownloadMediaChan foundation)
+        (\app_id mes -> writeChan (appSendOutMsgsChan foundation) (app_id, mes))
+        (\app_id rec_id media_id -> writeChan (appDownloadMediaChan foundation) (app_id, (rec_id, media_id)))
         opts
     where
         opts = appWxppSubsiteOpts settings

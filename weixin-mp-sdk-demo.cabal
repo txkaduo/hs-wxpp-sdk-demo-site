@@ -99,7 +99,7 @@ library
                  , yesod-helpers
                  , async
                  , system-filepath
-                 , weixin-mp-sdk                 >= 0.8
+                 , weixin-mp-sdk                 >= 0.9
 
     if flag(use-postgresql)
         build-depends: persistent-postgresql    >= 2.1.1       && < 2.2
