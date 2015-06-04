@@ -17,22 +17,95 @@ ip-from-header: "_env:IP_FROM_HEADER:false"
 # mutable-static: false
 # skip-combining: false
 
-database:
-  database: "_env:SQLITE_DATABASE:weixin-mp-sdk-demo.sqlite3"
+mysql:
+  user:     "_env:MYSQL_USER:wxpp"
+  password: "_env:MYSQL_PASSWORD:"
+  host:     "_env:MYSQL_HOST:localhost"
+  port:     "_env:MYSQL_PORT:3306"
+  database: "_env:MYSQL_DATABASE:wxpp"
+  poolsize: "_env:MYSQL_POOLSIZE:10"
+
+# ignored, if not using Sqlite
+sqlite:
+  database: "_env:SQLITE_DATABASE:sqlite-yesod.sqlite3"
   poolsize: "_env:SQLITE_POOLSIZE:10"
+
+# ignored, if not using PostgreSQL
+postgresql:
+  user:     "_env:PGUSER:pg-yesod"
+  password: "_env:PGPASS:pg-yesod"
+  host:     "_env:PGHOST:localhost"
+  port:     "_env:PGPORT:5432"
+  database: "_env:PGDATABASE:pg-yesod"
+  poolsize: "_env:PGPOOLSIZE:10"
 
 copyright: Insert copyright statement here
 #analytics: UA-YOURCODE
 
-wxpp:
-  app-id: "_env:WXPP_APP_ID:wx5961c4d11d66a53c"
-  secret: "_env:WXPP_SECRET:172947fa370ddeae040f9a06a11342b1"
-  token: "_env:kXPP_TOKEN:testtoken"
+wxpp~demo:
+  app-id: "_env:WXPP_1_APP_ID:wx5961c4d11d66a53c"
+  secret: "_env:WXPP_1_SECRET:172947fa370ddeae040f9a06a11342b1"
+  token: "_env:kXPP_1_TOKEN:testtoken"
   aes-key:
-    - "_env:WXPP_AES_KEY:WJmA6ZeDKg3yVYf4iuVmksKjFZdfZqbnliig6iUfpJf="
-    - "_env:WXPP_AES_KEY2:"
+    - "_env:WXPP_1_AES_KEY:WJmA6ZeDKg3yVYf4iuVmksKjFZdfZqbnliig6iUfpJf="
+    - "_env:WXPP_1_AES_KEY2:"
 
-wxpp-data-dir   : "_env:WXPP_DATA_DIR:demo-data"
+  data-dir   : "_env:WXPP_1_DATA_DIR:demo-data"
 
 acid:
   connect: "_env:ACID_CONNECT:demo-state"
+
+logger:
+  # 默认的日志有两个作用
+  # 没有其它日志处理某个写日志的请求时，使用这段配置处理，
+  # 如果它也不处理，则日志会被丢弃。
+  # Yesod 的 Hander 类型的函数（可能还有其它情况）内部使用的写日志函数
+  # 用的是同一个固定的 LoggerSet ，后者就是用这段配置产生的。
+  default:
+      type        : stderr
+
+      src-level:
+        "*" : warn
+
+  others:
+    -
+      # catch all sources
+      type  : stderr
+
+      src-level:
+        "*" : warn
+
+    -
+      type        : file
+      path        : logs/default.log
+      cut-at-size : 100m
+
+      src-level:
+        "*" : warn
+
+    -
+      type        : file
+      path        : logs/http.log
+      cut-at-size : 100m
+
+      src-level:
+        # http 来源现在只有非 Development 的时候才写到这里
+        # Development 的时候，直接去标准输出了
+        # 这个逻辑见 makeApplication 函数实现
+        http : debug
+
+    -
+      type        : file
+      path        : logs/yesod.log
+      cut-at-size : 100m
+
+      src-level:
+        yesod : debug
+
+    -
+      type        : file
+      path        : logs/sql.log
+      cut-at-size : 100m
+
+      src-level:
+        SQL : debug

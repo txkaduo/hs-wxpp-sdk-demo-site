@@ -14,9 +14,20 @@ module Application
     ) where
 
 import Control.Monad.Logger                 (liftLoc, runLoggingT, LoggingT(..))
+#if defined(USE_SQLITE)
 import Database.Persist.Sqlite              (createSqlitePool, runSqlPool,
                                              sqlDatabase, sqlPoolSize)
-import Import hiding (Proxy)
+#elif defined(USE_MYSQL)
+import Database.Persist.MySQL               (createMySQLPool, myConnInfo,
+                                             myPoolSize, runSqlPool)
+#elif defined(USE_POSTGRESQL)
+import Database.Persist.Postgresql          (createPostgresqlPool, pgConnStr,
+                                             pgPoolSize, runSqlPool)
+#else
+#error "unknown/unsupported database backend"
+#endif
+
+import Import hiding (Proxy, (</>))
 import Language.Haskell.TH.Syntax           (qLocation)
 import Network.Wai.Handler.Warp             (Settings, defaultSettings,
                                              defaultShouldDisplayException,
@@ -28,21 +39,29 @@ import Network.Wai.Middleware.RequestLogger (Destination (Logger),
                                              mkRequestLogger, outputFormat)
 import System.Log.FastLogger                (defaultBufSize, newStdoutLoggerSet,
                                              toLogStr)
-import Control.Concurrent.Async             (async, Async)
+import Control.Concurrent.Async             (async, race, Async)
 import Control.Concurrent                   (threadDelay)
-import Filesystem.Path.CurrentOS            (fromText, encodeString)
-import Data.Proxy
 
+import qualified Data.Map.Strict            as Map
 import qualified Data.Acid                  as A
 import Yesod.Helpers.Acid
+import Yesod.Helpers.Logger                 ( logFuncByHandlerV, newLogHandlerV
+#if DEVELOPMENT
+#else
+                                            , chooseYesodLoggerBySrcLV
+#endif
+                                            )
 
-import WeiXin.PublicPlatform.Yesod.Site
+import Filesystem.Path.CurrentOS            ((</>))
+import Yesod.Core.Types                     (loggerDate)
+
 import WeiXin.PublicPlatform.Yesod.Site.Function
-import WeiXin.PublicPlatform.Acid
+-- import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.CS
 import WeiXin.PublicPlatform.BgWork
-import WeiXin.PublicPlatform.InMsgHandler
 import WeiXin.PublicPlatform.Menu
+import WeiXin.PublicPlatform.Types
+import WeiXin.PublicPlatform.Misc
 
 -- Import all relevant handler modules here.
 -- Don't forget to add new modules to your cabal file!
@@ -55,35 +74,6 @@ import Handler.Home
 mkYesodDispatch "App" resourcesApp
 
 
--- | 因下面的 WxppInMsgDispatchHandler 也要一个 [WxppInMsgHandlerPrototype m]
--- 所以做了这个不带 WxppInMsgDispatchHandler
-allWxppInMsgHandlerPrototypes' :: forall m.
-    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
-    App
-    -> [WxppInMsgHandlerPrototype m]
-allWxppInMsgHandlerPrototypes' foundation =
-    WxppInMsgProcessorPrototype
-        (Proxy :: Proxy (StoreInMsgToDB m))
-        ( WxppSubDBActionRunner $ runAppMainDB foundation
-        , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (x, y)
-        )
-    : allBasicWxppInMsgHandlerPrototypes (appWxppDataDir settings </> "out-msg")
-    where
-        settings = appSettings foundation
-
-
-allWxppInMsgHandlerPrototypes :: forall m.
-    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
-    App
-    -> [WxppInMsgHandlerPrototype m]
-allWxppInMsgHandlerPrototypes foundation =
-    WxppInMsgProcessorPrototype
-        (Proxy :: Proxy (WxppInMsgDispatchHandler m))
-        ( allBasicWxppInMsgPredictorPrototypes
-        , allWxppInMsgHandlerPrototypes' foundation
-        )
-    : allWxppInMsgHandlerPrototypes' foundation
-
 
 -- | This function allocates resources (such as a database connection pool),
 -- performs initialization and return a foundation datatype value. This is also
@@ -95,6 +85,7 @@ makeFoundation appSettings = do
     -- subsite.
     appHttpManager <- newManager
     appLogger <- newStdoutLoggerSet defaultBufSize >>= makeYesodLogger
+    appLogHandlerV <- newLogHandlerV (loggerDate appLogger) (appLoggerConfig appSettings)
     appStatic <-
         (if appMutableStatic appSettings then staticDevel else static)
         (appStaticDir appSettings)
@@ -104,43 +95,44 @@ makeFoundation appSettings = do
     appDownloadMediaChan <- newChan
     appSendOutMsgsChan <- newChan
 
+    appForwardUrlMap <- newMVar def
+
+    appLastMsgHandlers <- liftM Map.fromList $
+        forM (Map.keys $ appWxppAppConfigMap appSettings) $ \k -> (k,) <$> newIORef Nothing
+
+    let logFunc = logFuncByHandlerV appLogHandlerV
+
     -- We need a log function to create a connection pool. We need a connection
     -- pool to create our foundation. And we need our foundation to get a
     -- logging function. To get out of this loop, we initially create a
     -- temporary foundation without a real connection pool, get a log function
     -- from there, and then create the real foundation.
     let mkFoundation appConnPool appAcid = do
-            let get_access_token = wxppAcidGetUsableAccessToken appAcid
-            let wxpp_config = appWxppAppConfig appSettings
-                data_dir = appWxppDataDir appSettings
-                handle_msg bs ime = runAppLoggingT tf $ do
-                                    in_msg_handlers <- liftIO $
-                                            readWxppInMsgHandlers
-                                                (allWxppInMsgHandlerPrototypes tf)
-                                                (encodeString $ data_dir </> fromText "msg-handlers.yml")
-                                            >>= either (throwM . userError . show) return
-                                    tryEveryInMsgHandler'
-                                            appAcid
-                                            (liftIO get_access_token)
-                                            in_msg_handlers
-                                            bs ime
-
-                send_msg = writeChan appSendOutMsgsChan
-
-                appWxppSub  = WxppSub wxpp_config get_access_token send_msg
-                                data_dir
-                                handle_msg (runAppLoggingT tf)
-                tf = App {..}
+            let tf = App {..}
             return tf
 
+    {-
     tempFoundation <- mkFoundation (error "connPool forced in tempFoundation")
                             (error "appAcid forced in tempFoundation")
     let logFunc = messageLoggerSource tempFoundation appLogger
+    --}
 
     -- Create the database connection pool
+#if defined(USE_SQLITE)
     pool <- flip runLoggingT logFunc $ createSqlitePool
         (sqlDatabase $ appDatabaseConf appSettings)
         (sqlPoolSize $ appDatabaseConf appSettings)
+#elif defined(USE_MYSQL)
+    pool <- flip runLoggingT logFunc $ createMySQLPool
+        (myConnInfo $ appDatabaseConf appSettings)
+        (myPoolSize $ appDatabaseConf appSettings)
+#elif defined(USE_POSTGRESQL)
+    pool <- flip runLoggingT logFunc $ createPostgresqlPool
+        (pgConnStr  $ appDatabaseConf appSettings)
+        (pgPoolSize $ appDatabaseConf appSettings)
+#else
+#error "unknown/unsupported database backend"
+#endif
 
     -- Perform database migration using our application's logging settings.
     runLoggingT (runSqlPool (runMigration migrateAll) pool) logFunc
@@ -156,6 +148,13 @@ makeFoundation appSettings = do
 -- applyng some additional middlewares.
 makeApplication :: App -> IO Application
 makeApplication foundation = do
+    let def_logger = appLogger foundation
+#if DEVELOPMENT
+    let logger = def_logger
+#else
+    logger <- liftM (fromMaybe def_logger) $
+                    chooseYesodLoggerBySrcLV (appLogHandlerV foundation) "http"
+#endif
     logWare <- mkRequestLogger def
         { outputFormat =
             if appDetailedRequestLogging $ appSettings foundation
@@ -164,7 +163,7 @@ makeApplication foundation = do
                         (if appIpFromHeader $ appSettings foundation
                             then FromFallback
                             else FromSocket)
-        , destination = Logger $ loggerSet $ appLogger foundation
+        , destination = Logger $ loggerSet logger
         }
 
     -- Create the WAI application and apply middlewares
@@ -176,10 +175,10 @@ warpSettings :: App -> Settings
 warpSettings foundation =
       setPort (appPort $ appSettings foundation)
     $ setHost (appHost $ appSettings foundation)
-    $ setOnException (\_req e ->
-        when (defaultShouldDisplayException e) $ messageLoggerSource
-            foundation
-            (appLogger foundation)
+    $ setOnException (\_req e -> do
+        let logFunc = logFuncByHandlerV (appLogHandlerV foundation)
+        when (defaultShouldDisplayException e) $
+            logFunc
             $(qLocation >>= liftLoc)
             "yesod"
             LevelError
@@ -188,18 +187,22 @@ warpSettings foundation =
 
 initAppBgWorks :: App -> IO [Async ()]
 initAppBgWorks foundation = do
-    a1 <- if acidStateConfigLocal acid_config
+    a1 <- if atk_check_interval > 0
             then do
-                -- this process is the 'real' acid-state opener (local, not remote)
-                ay <- async $ runAppLoggingT foundation $
+                ay_list <- forM (Map.elems $ appWxppAppConfigMap settings) $ \wac -> do
+                        async $ runAppLoggingT foundation $
                                 loopRefreshAccessToken chk_abort
-                                    1       -- 每秒检查一次
+                                    atk_check_interval
                                     wac
-                                    acid
+                                    cache
                                     (fromIntegral (60 * 5 :: Int))
                                             -- 接近过期 5 分钟内会更新 access token
-                ay2 <- async $ loopRunBgJob chk_abort (60 * 10) (A.createCheckpoint acid)
-                return [ay, ay2]
+                                            --
+                ay2 <- async $ loopRunBgJob chk_abort (60 * 10) $ do
+                                A.createCheckpoint acid
+                                A.createArchive acid
+
+                return $ ay2 : ay_list
                 
             else return []
 
@@ -210,67 +213,83 @@ initAppBgWorks foundation = do
                     return [ay]
 
     let read_chan_and_down = do
-            if_done <- chk_abort
-            if if_done
-                then return ()
-                else do
-                    (msg_id, media_id) <- readChan down_chan
-                    m_atk <- wxppAcidGetUsableAccessToken acid
-                    runAppLoggingT foundation $ do
-                      case m_atk of
-                          Nothing   -> do
-                              -- 没有可用的 AccessToken
-                              -- 这可能是个暂时的困难，可以稍等之后重试
-                              -- TODO: 但又不能长时间地重试，以免积压过多的请求
-                              $(logError) $
-                                "Cannot download media because of no AccessToken available"
-                              liftIO $ do
-                                threadDelay $ 1000 * 1000 * 15
-                                writeChan down_chan (msg_id, media_id)
+            if_done_or <- liftIO $ race chk_abort (readChan down_chan)
+            case if_done_or of
+                Left True -> return ()
+                Left False -> read_chan_and_down
+                Right ch_msg@(app_id, (msg_id, media_id)) -> do
+                    m_atk <- wxppGetUsableAccessToken cache app_id
+                    case m_atk of
+                        Nothing   -> do
+                            -- 没有可用的 AccessToken
+                            -- 这可能是个暂时的困难，可以稍等之后重试
+                            -- TODO: 但又不能长时间地重试，以免积压过多的请求
+                            $(logError) $
+                              "Cannot download media because of no AccessToken available"
+                            liftIO $ do
+                              threadDelay $ 1000 * 1000 * 15
+                              writeChan down_chan ch_msg
 
-                          Just atk  -> do
-                              runAppMainDB foundation $
-                                  downloadSaveMediaToDB atk msg_id media_id
+                        Just (atk, _) -> do
+                            runAppMainDB foundation $
+                                downloadSaveMediaToDB atk msg_id media_id
+
                     read_chan_and_down
 
-    a3 <- async $ read_chan_and_down
+    a3 <- async $ runAppLoggingT foundation $
+                logWxppWsExcAndRetryLoop "read_chan_and_down" $ read_chan_and_down
 
     let read_chan_and_send = do
-            if_done <- chk_abort
-            if if_done
-                then return ()
-                else do
-                    out_msg_e_lst <- readChan send_chan
-                    m_atk <- wxppAcidGetUsableAccessToken acid
-                    runAppLoggingT foundation $ do
-                      case m_atk of
-                            Nothing -> do
-                                $(logError) $ "cannot send outgoing messages through CS: "
-                                    <> "no access token available"
-                            Just atk ->
-                                mapM_ (wxppCsSendOutMsg atk Nothing) out_msg_e_lst
+            if_done_or <- liftIO $ race chk_abort (readChan send_chan)
+            case if_done_or of
+                Left True -> return ()
+                Left False -> read_chan_and_send
+                Right (app_id, out_msg_e_lst) -> do
+                    m_atk <- wxppGetUsableAccessToken cache app_id
+                    case m_atk of
+                          Nothing -> do
+                              $(logError) $ "cannot send outgoing messages through CS: "
+                                  <> "no access token available"
+                          Just (atk, _) -> do
+                              $logDebug $ fromString $
+                                show (length out_msg_e_lst)
+                                    ++ " messages to send in background."
+                              forM_ out_msg_e_lst $ \msg -> do
+                                  logWxppWsExcThen "wxppCsSendOutMsg"
+                                      (const $ return ()) (const $ return ())
+                                      (wxppCsSendOutMsg atk Nothing msg)
 
-    a4 <- async $ read_chan_and_send
+                    read_chan_and_send
 
-    a5 <- async $ runAppLoggingT foundation $ do
+    a4 <- async $ runAppLoggingT foundation $
+                  logWxppWsExcAndRetryLoop "read_chan_and_send" $ read_chan_and_send
+
+    a5_list <- forM (Map.elems $ appWxppAppConfigMap settings) $ \wac -> do
+            async $ runAppLoggingT foundation $ do
                     -- XXX: 延迟一点，等待 access token 加载完成
                     -- 如果不能解决问题，可以等 access token 确认已取得后，重启程序
                     liftIO $ threadDelay $ 2 * 1000 * 1000
 
-                    wxppWatchMenuYaml
-                        (wxppAcidGetUsableAccessToken acid)
+                    logWxppWsExcAndRetryLoop "wxppWatchMenuYaml" $ wxppWatchMenuYaml
+                        (fmap (fmap fst) $ wxppGetUsableAccessToken cache $ wxppAppConfigAppID wac)
                         (void chk_abort)
-                        (appWxppDataDir settings </> "menu.yml")
+                        (wxppAppConfigDataDir wac </> "menu.yml")
 
-    return $ a5 : a4 : a3 : a1 <> a2
+    a6 <- async $ runAppLoggingT foundation $ do
+            loopCleanupTimedOutForwardUrl
+                  (fmap (fmap fst) . wxppGetUsableAccessToken cache)
+                  (appForwardUrlMap foundation)
+
+    return $ a6 : a5_list <> [ a4 ] <> [ a3 ] <> a1 <> a2
     where
         acid = appAcid foundation
-        wac     = appWxppAppConfig $ appSettings foundation
         acid_config = appAcidConfig $ appSettings foundation
         chk_abort = readMVar (appBgThreadShutdown foundation) >> return True
         down_chan = appDownloadMediaChan foundation
         send_chan = appSendOutMsgsChan foundation
         settings = appSettings foundation
+        cache = appWxppCacheBackend foundation
+        atk_check_interval = appAccessTokenCheckInterval settings
 
 -- | For yesod devel, return the Warp settings and WAI Application.
 getApplicationDev :: IO (Settings, Application)

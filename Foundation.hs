@@ -1,6 +1,9 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Foundation where
 
-import Import.NoFoundation
+import Import.NoFoundation hiding (Proxy, FilePath, (</>))
 import Database.Persist.Sql (ConnectionPool, runSqlPool)
 import Text.Hamlet          (hamletFile)
 import Text.Jasmine         (minifym)
@@ -9,11 +12,25 @@ import Yesod.Default.Util   (addStaticContentExternal)
 import Yesod.Core.Types     (Logger)
 import qualified Yesod.Core.Unsafe as Unsafe
 
-import Control.Monad.Logger                 (runLoggingT, LoggingT)
+import Filesystem.Path.CurrentOS            ((</>))
+import Data.Proxy
+import Control.Monad.Logger                 (LoggingT)
+import qualified Data.Map.Strict            as Map
+import qualified Data.Conduit.List          as CL
 import Yesod.Helpers.Acid
+import Yesod.Helpers.Persist                (DBActionRunner(..))
+import Yesod.Helpers.Logger                 (LoggingTRunner(..))
 import WeiXin.PublicPlatform.Yesod.Site
 import WeiXin.PublicPlatform.Acid
 import WeiXin.PublicPlatform.Types
+import WeiXin.PublicPlatform.InMsgHandler
+import WeiXin.PublicPlatform.Yesod.Site.Function
+import WeiXin.PublicPlatform.Misc
+
+import Yesod.Helpers.Logger                 ( LogHandlerV
+                                            , defaultYesodLoggerHandlerV
+                                            , defaultShouldLogLV
+                                            )
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -24,17 +41,129 @@ data App = App
     , appStatic      :: Static -- ^ Settings for static file serving.
     , appConnPool    :: ConnectionPool -- ^ Database connection pool.
     , appHttpManager :: Manager
-    , appLogger      :: Logger
-    , appWxppSub     :: WxppSub
+    , appLogger      :: Logger  -- ^ 现在这个 Logger 已基本弃用
+                                -- 仅用作配置失败时的后备
+    , appLogHandlerV :: LogHandlerV
     , appBgThreadShutdown   :: MVar ()
-    , appAcid               :: AcidState WxppAcidState
-    , appDownloadMediaChan  :: Chan (WxppInMsgRecordId, WxppMediaID)
         -- ^ put value into this MVar will make backgroup threads exit
-    , appSendOutMsgsChan    :: Chan [WxppOutMsgEntity]
+    , appAcid               :: AcidState WxppAcidState
+    , appDownloadMediaChan  :: Chan (WxppAppID, (WxppInMsgRecordId, WxppMediaID))
+    , appSendOutMsgsChan    :: Chan (WxppAppID, [WxppOutMsgEntity])
+    , appForwardUrlMap      :: MVar ForwardUrlMap
+    , appLastMsgHandlers    :: Map WxppAppID (IORef (Maybe [SomeWxppInMsgHandler (LoggingT IO)]))
     }
 
 instance HasHttpManager App where
     getHttpManager = appHttpManager
+
+instance LoggingTRunner App where
+    runLoggingTWith foundation = runLoggingTWith (appLogHandlerV foundation)
+
+instance DBActionRunner App where
+    type DBAction App = SqlPersistT
+    runDBWith = runAppMainDB
+
+runAppLoggingT :: App -> LoggingT m a -> m a
+runAppLoggingT = runLoggingTWith
+
+runAppMainDB :: MonadBaseControl IO m =>
+    App
+    -> SqlPersistT m a
+    -> m a
+runAppMainDB foundation op = runSqlPool op (appConnPool foundation)
+
+runAppMainDBLogged :: MonadBaseControl IO m =>
+    App
+    -> SqlPersistT (LoggingT m) a
+    -> m a
+runAppMainDBLogged foundation = runAppLoggingT foundation . runAppMainDB foundation
+
+-- | 因下面的 WxppInMsgDispatchHandler 也要一个 [WxppInMsgHandlerPrototype m]
+-- 所以做了这个不带 WxppInMsgDispatchHandler
+allWxppInMsgHandlerPrototypes' :: forall m.
+    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
+    App
+    -> WxppAppID
+    -> [WxppInMsgHandlerPrototype m]
+allWxppInMsgHandlerPrototypes' foundation app_id =
+    case Map.lookup app_id app_conf_map of
+        Nothing -> []
+        Just wac ->
+            WxppInMsgProcessorPrototype
+                (Proxy :: Proxy (StoreInMsgToDB m))
+                ( app_id
+                , sub_db_runner
+                , \x y -> liftIO $ writeChan (appDownloadMediaChan foundation) (app_id, (x, y))
+                )
+            : WxppInMsgProcessorPrototype
+                (Proxy :: Proxy (CacheAppOpenIdToUnionId m))
+                ( app_id, sub_db_runner )
+            : allBasicWxppInMsgHandlerPrototypes
+                app_id
+                (wxppAppConfigDataDir wac </> "out-msg")
+                (appForwardUrlMap foundation)
+    where
+        sub_db_runner = WxppSubDBActionRunner $ runAppMainDB foundation
+        app_conf_map = appWxppAppConfigMap settings
+        settings = appSettings foundation
+
+
+allWxppInMsgHandlerPrototypes :: forall m.
+    ( MonadIO m, MonadLogger m, MonadThrow m, MonadCatch m, MonadBaseControl IO m ) =>
+    App
+    -> WxppAppID
+    -> [WxppInMsgHandlerPrototype m]
+allWxppInMsgHandlerPrototypes foundation app_id =
+    all_protos
+    where
+        proto_dispatch =
+            WxppInMsgProcessorPrototype
+                (Proxy :: Proxy (WxppInMsgDispatchHandler m))
+                (allBasicWxppInMsgPredictorPrototypes, all_protos)
+
+        -- CAUTION: this value call itself recurisively
+        all_protos = proto_dispatch :
+                        allWxppInMsgHandlerPrototypes' foundation app_id
+
+
+appWxppCacheBackend :: App -> SomeWxppCacheBackend
+appWxppCacheBackend foundation = SomeWxppCacheBackend $
+#if 0
+        (WxppCacheByAcid $ appAcid foundation)
+#else
+        (WxppSubDBActionRunner $ runDBWith foundation :: WxppSubDBActionRunner IO)
+#endif
+
+appGetWxppSub :: App -> WxppAppID -> MaybeWxppSub
+appGetWxppSub foundation =
+    mkMaybeWxppSub
+        foundation
+        (appWxppCacheBackend foundation)
+        (flip Map.lookup $ appLastMsgHandlers foundation)
+        (appWxppAppConfigMap $ appSettings foundation)
+        (allWxppInMsgHandlerPrototypes foundation)
+        (appSendOutMsgsChan foundation)
+        (appDownloadMediaChan foundation)
+        opts
+    where
+        opts = appWxppSubsiteOpts settings
+        settings = appSettings foundation
+
+appGetWxppSubNoApp :: App -> WxppSubNoApp
+appGetWxppSubNoApp foundation =
+    WxppSubNoApp
+        get_openid_by_union_id
+        (runAppLoggingT foundation)
+        (wxppSubTrustedWaiReq opts)
+    where
+        opts = appWxppSubsiteOpts settings
+        settings = appSettings foundation
+
+        get_openid_by_union_id union_id = runAppMainDBLogged foundation $ runResourceT $ do
+            selectSource [ WxppUserCachedInfoUnionId ==. Just union_id ] []
+                =$= CL.map ((wxppUserCachedInfoOpenId &&& wxppUserCachedInfoApp) . entityVal)
+                $$ CL.consume
+
 
 -- This is where we define all of the routes in our application. For a full
 -- explanation of the syntax, please see:
@@ -107,12 +236,22 @@ instance Yesod App where
 
     -- What messages should be logged. The following includes all messages when
     -- in development, and warnings and errors in production.
+    {-
     shouldLog app _source level =
         appShouldLogAll (appSettings app)
             || level == LevelWarn
             || level == LevelError
+            --}
 
-    makeLogger = return . appLogger
+    shouldLogIO foundation source level = do
+        defaultShouldLogLV (appLogHandlerV foundation) source level
+
+    makeLogger foundation =
+        -- return . appLogger
+        return $ fromMaybe def_logger $
+                defaultYesodLoggerHandlerV (appLogHandlerV foundation)
+        where
+            def_logger = appLogger foundation
 
 #if !defined(DEVELOPMENT) && defined(OFFLOAD_STATIC_SITE)
     urlRenderOverride master    (StaticR s) =
@@ -163,23 +302,6 @@ instance RenderMessage App FormMessage where
 
 unsafeHandler :: App -> Handler a -> IO a
 unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
-
-runAppLoggingT :: App -> LoggingT m a -> m a
-runAppLoggingT foundation op = do
-    let logger = appLogger foundation
-    runLoggingT op (messageLoggerSource foundation logger)
-
-runAppMainDB :: MonadBaseControl IO m =>
-    App
-    -> SqlPersistT m a
-    -> m a
-runAppMainDB foundation op = runSqlPool op (appConnPool foundation)
-
-runAppMainDBLogged :: MonadBaseControl IO m =>
-    App
-    -> SqlPersistT (LoggingT m) a
-    -> m a
-runAppMainDBLogged foundation = runAppLoggingT foundation . runAppMainDB foundation
 
 -- Note: Some functionality previously present in the scaffolding has been
 -- moved to documentation in the Wiki. Following are some hopefully helpful

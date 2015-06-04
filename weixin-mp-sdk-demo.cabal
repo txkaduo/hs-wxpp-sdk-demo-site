@@ -11,6 +11,20 @@ Flag library-only
     Description:   Build for use with "yesod devel"
     Default:       False
 
+Flag use-sqlite
+    Description:   Use Sqlite3 as persistent backend
+    Default:       True
+
+Flag use-postgresql
+    Description:   Use PostgreSQL as persistent backend
+    Default:       False
+    Manual:        True
+
+Flag use-mysql
+    Description:   Use MySQL as persistent backend
+    Default:       False
+    Manual:        True
+
 library
     hs-source-dirs: ., app
     exposed-modules: Application
@@ -59,7 +73,6 @@ library
                  , bytestring                    >= 0.9        && < 0.11
                  , text                          >= 0.11       && < 2.0
                  , persistent                    >= 2.0        && < 2.2
-                 , persistent-sqlite             >= 2.1.1      && < 2.2
                  , persistent-template           >= 2.0        && < 2.2
                  , template-haskell
                  , shakespeare                   >= 2.0        && < 2.1
@@ -86,7 +99,19 @@ library
                  , yesod-helpers
                  , async
                  , system-filepath
-                 , weixin-mp-sdk                 >= 0.4
+                 , weixin-mp-sdk                 >= 0.8
+
+    if flag(use-postgresql)
+        build-depends: persistent-postgresql    >= 2.1.1       && < 2.2
+        cpp-options: -DUSE_POSTGRESQL
+    else
+        if flag(use-mysql)
+            build-depends: persistent-mysql    	>= 2.1.1       && < 2.2
+            cpp-options: -DUSE_MYSQL
+        else
+            if flag(use-sqlite)
+                build-depends: persistent-sqlite >= 2.1.1      && < 2.2
+                cpp-options: -DUSE_SQLITE
 
 executable         weixin-mp-sdk-demo
     if flag(library-only)

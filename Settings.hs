@@ -11,16 +11,38 @@ import Data.Aeson                  (Result (..), fromJSON, withObject, (.!=),
                                     (.:?))
 import Data.FileEmbed              (embedFile)
 import Data.Yaml                   (decodeEither')
+#if defined(USE_SQLITE)
 import Database.Persist.Sqlite     (SqliteConf)
+#elif defined(USE_MYSQL)
+import Database.Persist.MySQL      (MySQLConf)
+#elif defined(USE_POSTGRESQL)
+import Database.Persist.Postgresql (PostgresConf)
+#else
+#error "unknown/unsupported database backend"
+#endif
+
 import Language.Haskell.TH.Syntax  (Exp, Name, Q)
 import Network.Wai.Handler.Warp    (HostPreference)
 import Yesod.Default.Config2       (applyEnvValue, configSettingsYml)
 import Yesod.Default.Util          (WidgetFileSettings, widgetFileNoReload,
                                     widgetFileReload)
-import Filesystem.Path.CurrentOS   (fromText)
 
 import Yesod.Helpers.Acid
+import Yesod.Helpers.Logger
+
 import WeiXin.PublicPlatform.Types
+import WeiXin.PublicPlatform.Misc
+import WeiXin.PublicPlatform.Yesod.Site.Data
+
+#if defined(USE_SQLITE)
+type DBConf = SqliteConf
+#elif defined(USE_MYSQL)
+type DBConf = MySQLConf
+#elif defined(USE_POSTGRESQL)
+type DBConf = PostgresConf
+#else
+#error "unknown/unsupported database backend"
+#endif
 
 -- | Runtime settings to configure this application. These settings can be
 -- loaded from various sources: defaults, environment variables, config files,
@@ -28,7 +50,7 @@ import WeiXin.PublicPlatform.Types
 data AppSettings = AppSettings
     { appStaticDir              :: String
     -- ^ Directory from which to serve static files.
-    , appDatabaseConf           :: SqliteConf
+    , appDatabaseConf           :: DBConf
     -- ^ Configuration settings for accessing the database.
     , appRoot                   :: Text
     -- ^ Base for all generated URLs.
@@ -39,6 +61,8 @@ data AppSettings = AppSettings
     , appIpFromHeader           :: Bool
     -- ^ Get the IP address from the header when logging. Useful when sitting
     -- behind a reverse proxy.
+
+    , appAccessTokenCheckInterval :: Int
 
     , appDetailedRequestLogging :: Bool
     -- ^ Use detailed request logging system
@@ -56,9 +80,11 @@ data AppSettings = AppSettings
     -- ^ Copyright text to appear in the footer of the page
     , appAnalytics              :: Maybe Text
     -- ^ Google Analytics code
-    , appWxppAppConfig          :: WxppAppConfig
-    , appWxppDataDir            :: FilePath
+    , appWxppAppConfigMap       :: Map WxppAppID WxppAppConfig
     , appAcidConfig             :: AcidStateConfig
+
+    , appWxppSubsiteOpts        :: WxppSubsiteOpts
+    , appLoggerConfig           :: LoggerConfig
     }
 
 instance FromJSON AppSettings where
@@ -70,11 +96,23 @@ instance FromJSON AppSettings where
                 False
 #endif
         appStaticDir              <- o .: "static-dir"
-        appDatabaseConf           <- o .: "database"
+
+#if defined(USE_SQLITE)
+        appDatabaseConf           <- o .: "sqlite"
+#elif defined(USE_MYSQL)
+        appDatabaseConf           <- o .: "mysql"
+#elif defined(USE_POSTGRESQL)
+        appDatabaseConf           <- o .: "postgresql"
+#else
+#error "unknown/unsupported database backend"
+#endif
+
         appRoot                   <- o .: "approot"
         appHost                   <- fromString <$> o .: "host"
         appPort                   <- o .: "port"
         appIpFromHeader           <- o .: "ip-from-header"
+
+        appAccessTokenCheckInterval <- o .:? "access-token-check-interval" .!= 60
 
         appDetailedRequestLogging <- o .:? "detailed-logging" .!= defaultDev
         appShouldLogAll           <- o .:? "should-log-all"   .!= defaultDev
@@ -84,10 +122,11 @@ instance FromJSON AppSettings where
 
         appCopyright              <- o .: "copyright"
         appAnalytics              <- o .:? "analytics"
-        appWxppAppConfig          <- o .: "wxpp"
-        appWxppDataDir            <- fromText <$> o .: "wxpp-data-dir"
+        appWxppAppConfigMap       <- parseMultWxppAppConfig o
         appAcidConfig             <- o .: "acid"
 
+        appWxppSubsiteOpts        <- o .:? "wxpp-subsite" .!= def
+        appLoggerConfig           <- o .:? "logger" .!= def
         return AppSettings {..}
 
 -- | Settings for 'widgetFile', such as which template languages to support and
